@@ -1,9 +1,9 @@
-import time
+from stable_baselines3 import SAC
+from stable_baselines3.common.monitor import Monitor
+import gymnasium as gym
 
 from robot.franka_mock import FrankaInterface
 from franka_reach.franka_reach_env import FrankaReachEnv
-from franka_reach.franka_reach_policy import ReachPolicy
-
 from feedback.web_ui import start_ui
 
 
@@ -18,39 +18,29 @@ def main():
 
     robot = FrankaInterface()
 
-    env = FrankaReachEnv(robot)
-
-    policy = ReachPolicy()
-
-    obs, _ = env.reset()
-
-    done = False
-
-    while not done:
-
-        action = policy.predict(obs)
-
-        obs, reward, done, _, info = env.step(
-            action
+    env = Monitor(
+        gym.wrappers.TimeLimit(
+            FrankaReachEnv(robot),
+            max_episode_steps=100
         )
+    )
 
-        if info["correction"] is not None:
+    model = SAC(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        learning_rate=3e-4,
+        buffer_size=100_000,
+        batch_size=256,
+    )
 
-            action += info["correction"]
+    model.learn(
+        total_timesteps=500_000
+    )
 
-            print(
-                "Human correction:",
-                info["correction"]
-            )
-
-        print(
-            f"distance={info['distance']:.3f} "
-            f"human_reward={info['human_reward']}"
-        )
-
-        time.sleep(0.2)
-
-    print("Goal reached")
+    model.save(
+        "models/franka_reach_sac"
+    )
 
 
 if __name__ == "__main__":
