@@ -85,7 +85,13 @@ class FrankaReachEnv(gym.Env):
             "distance": distance
         }
 
-        reward = env_reward
+        # Small human reward shaping
+        human_reward_scale = 3.2
+
+        reward = (
+            env_reward
+            + human_reward_scale * human_reward
+        )
 
         return (
             self._get_obs(),
