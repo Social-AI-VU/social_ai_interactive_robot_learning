@@ -76,46 +76,6 @@ def bad():
     return redirect("/")
 
 
-@app.route("/left", methods=["POST"])
-def left():
-
-    feedback_queue.put(
-        {"correction": [-0.5, 0.0, 0.0]}
-    )
-
-    return redirect("/")
-
-
-@app.route("/right", methods=["POST"])
-def right():
-
-    feedback_queue.put(
-        {"correction": [0.5, 0.0, 0.0]}
-    )
-
-    return redirect("/")
-
-
-@app.route("/forward", methods=["POST"])
-def forward():
-
-    feedback_queue.put(
-        {"correction": [0.0, 0.5, 0.0]}
-    )
-
-    return redirect("/")
-
-
-@app.route("/backward", methods=["POST"])
-def backward():
-
-    feedback_queue.put(
-        {"correction": [0.0, -0.5, 0.0]}
-    )
-
-    return redirect("/")
-
-
 def launch_ui():
 
     app.run(
