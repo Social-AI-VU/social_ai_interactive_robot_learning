@@ -1,3 +1,9 @@
-gymnasium
-numpy
-pygame
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+numpy==1.26.4
+scipy==1.13.1
+pyspacemouse==1.1.4
+torch==2.3.1
+tqdm==4.66.4
+rich==13.7.1
+sic-framework
