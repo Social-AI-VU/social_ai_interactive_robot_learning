@@ -1,53 +1,48 @@
 import gymnasium as gym
 
 from stable_baselines3 import SAC
-from stable_baselines3.common.monitor import (
-    Monitor,
-)
+from stable_baselines3.common.monitor import Monitor
+from franka_reach.franka_reach_env import FrankaReachEnv
 
-from sic_framework.devices.desktop import (
-    Desktop,
-)
-
-from robot.franka_rl_interface import (
-    FrankaRLInterface,
-)
-
-from feedback.spacemouse_reward import (
-    RewardShapingHandler,
-)
-
-from franka_reach.franka_reach_env import (
-    FrankaReachEnv,
-)
-
+# some imports are in the code so that not everything is imported when the real robot, spacemouse etc. 
+# is not connected, which would cause issues
 
 MODEL_PATH = "franka_reach_sac"
-
+USE_SIM = True
+USE_WEB = True
 
 def main():
 
-    desktop = Desktop()
+    if USE_WEB:
+        from feedback.web_reward import WebRewardSource
+        reward_source = (
+            WebRewardSource()
+        )
+    else:
+        from sic_framework.devices.desktop import Desktop
+        from feedback.spacemouse_reward import SpacemouseRewardSource
+        desktop = Desktop()
+        reward_source = (
+            SpacemouseRewardSource(
+                desktop
+            )
+        )
 
-    reward_handler = (
-        RewardShapingHandler()
-    )
+    reward_source.start()
 
-    desktop.spacemouse.register_callback(
-        reward_handler.on_click
-    )
-
-    print(
-        "\nSpaceMouse reward shaping active\n"
-        "Left button = GOOD\n"
-        "Right button = BAD\n"
-    )
-
-    robot = FrankaRLInterface()
+    if USE_SIM:
+        from robot.franka_sim import FrankaSim
+        robot = FrankaSim()
+        goal = robot.get_goal()
+    else:
+        from robot.franka_real import FrankaReal # import here to avoid issues when the real robot is not connected
+        robot = FrankaReal()
+        goal = [0.6, 0.0, 0.4]
 
     env = FrankaReachEnv(
         robot=robot,
         human_reward_weight=0.1,
+        goal=goal,
     )
 
     env = gym.wrappers.TimeLimit(

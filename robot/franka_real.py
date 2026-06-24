@@ -10,7 +10,7 @@ from sic_framework.devices.common_franka.franka_motion import (
 )
 
 
-class FrankaRLInterface:
+class FrankaReal:
 
     WORKSPACE_MIN = np.array(
         [0.30, -0.40, 0.10],
@@ -34,7 +34,7 @@ class FrankaRLInterface:
         self.position = None
         self.orientation = None
 
-        self.pose_lock = threading.Lock()
+        self.lock = threading.Lock()
 
         self.franka.motion.register_callback(
             self._on_pose
@@ -44,75 +44,59 @@ class FrankaRLInterface:
             FrankaPoseRequest(stream=True)
         )
 
-        print("Waiting for Franka pose stream...")
-
         while self.position is None:
             time.sleep(0.1)
 
-        print("Franka connected.")
-
     def _on_pose(self, pose):
 
-        with self.pose_lock:
+        with self.lock:
 
-            self.position = np.array(
+            self.position = np.asarray(
                 pose.position,
                 dtype=np.float32,
             )
 
-            self.orientation = np.array(
+            self.orientation = np.asarray(
                 pose.orientation,
                 dtype=np.float32,
             )
 
     def get_ee_position(self):
 
-        with self.pose_lock:
+        with self.lock:
             return self.position.copy()
 
     def apply_action(self, action):
 
-        action = np.asarray(
+        with self.lock:
+
+            position = self.position.copy()
+            orientation = self.orientation.copy()
+
+        delta = 0.01 * np.asarray(
             action,
             dtype=np.float32,
         )
 
-        with self.pose_lock:
+        target = position + delta
 
-            current_position = (
-                self.position.copy()
-            )
-
-            current_orientation = (
-                self.orientation.copy()
-            )
-
-        # 1 cm max motion per RL step
-        delta = 0.01 * action
-
-        new_position = (
-            current_position + delta
-        )
-
-        new_position = np.clip(
-            new_position,
+        target = np.clip(
+            target,
             self.WORKSPACE_MIN,
             self.WORKSPACE_MAX,
         )
 
         self.franka.motion.send_message(
             FrankaPose(
-                position=new_position,
-                orientation=current_orientation,
+                position=target,
+                orientation=orientation,
             )
         )
 
     def reset(self):
 
-        with self.pose_lock:
-            orientation = (
-                self.orientation.copy()
-            )
+        with self.lock:
+            orientation = self.orientation.copy()
 
         self.franka.motion.send_message(
             FrankaPose(
