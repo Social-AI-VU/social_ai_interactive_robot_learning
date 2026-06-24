@@ -1,1 +1,9 @@
 *.pyc
+Lib/
+Library/
+models/
+policies/
+share/
+Scripts/
+Include/
+pyvenv.cfg
