@@ -33,16 +33,14 @@ def main():
     if USE_SIM:
         from robot.franka_sim import FrankaSim
         robot = FrankaSim()
-        goal = robot.get_goal()
     else:
         from robot.franka_real import FrankaReal # import here to avoid issues when the real robot is not connected
-        robot = FrankaReal()
-        goal = [0.6, 0.0, 0.4]
+        robot = FrankaReal(goal=[0.6, 0.0, 0.4])
+        
 
     env = FrankaReachEnv(
         robot=robot,
         human_reward_weight=0.1,
-        goal=goal,
     )
 
     env = gym.wrappers.TimeLimit(

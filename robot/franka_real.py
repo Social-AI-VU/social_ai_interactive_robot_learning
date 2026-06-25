@@ -3,6 +3,7 @@ import time
 
 import numpy as np
 
+from franka_reach import goal_generator
 from sic_framework.devices.franka import Franka
 from sic_framework.devices.common_franka.franka_motion import (
     FrankaPose,
@@ -27,7 +28,7 @@ class FrankaReal:
         dtype=np.float32,
     )
 
-    def __init__(self):
+    def __init__(self, goal):
 
         self.franka = Franka()
 
@@ -39,6 +40,8 @@ class FrankaReal:
         self.franka.motion.register_callback(
             self._on_pose
         )
+
+        self.goal = goal
 
         self.franka.motion.request(
             FrankaPoseRequest(stream=True)
@@ -106,3 +109,6 @@ class FrankaReal:
         )
 
         time.sleep(2.0)
+
+    def get_goal(self):
+        return self.goal

@@ -13,7 +13,6 @@ class FrankaReachEnv(gym.Env):
     def __init__(
         self,
         robot,
-        goal,
         human_reward_weight=0.1,
     ):
 
@@ -21,7 +20,7 @@ class FrankaReachEnv(gym.Env):
 
         self.robot = robot
 
-        self.goal = np.array(goal, dtype=np.float32)
+        self.goal = self.robot.get_goal()
 
         self.human_reward_weight = (
             human_reward_weight
@@ -54,6 +53,8 @@ class FrankaReachEnv(gym.Env):
         super().reset(seed=seed)
 
         self.robot.reset()
+
+        self.goal = self.robot.get_goal()
 
         while not feedback_queue.empty():
             feedback_queue.get()
