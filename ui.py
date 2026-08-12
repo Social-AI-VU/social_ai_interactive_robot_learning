@@ -14,19 +14,6 @@ import glob
 import json
 from pathlib import Path
 
-# Voice support — imported lazily so missing deps don't break the rest of the UI
-try:
-    from audio_recorder_streamlit import audio_recorder as _audio_recorder
-    VOICE_AVAILABLE = True
-except ImportError:
-    VOICE_AVAILABLE = False
-
-try:
-    from src.voice.voice_handler import VoiceHandler
-    VOICE_HANDLER_AVAILABLE = True
-except ImportError:
-    VOICE_HANDLER_AVAILABLE = False
-
 # Log buffer - background threads write here, main thread drains it
 _log_queue: queue.Queue = queue.Queue()
 
@@ -82,11 +69,6 @@ def init_state():
         "sim_collecting":      False,   # True while collection terminal is open
         "sim_last_demo_path":  None,    # path to most recent demo.hdf5
         "sim_processing":      False,   # True while post-processing runs
-        # Voice
-        "voice_log":        [],   # list of {"role": "user"/"robot", "text": str}
-        "voice_pending":    None, # pending action waiting for user confirmation
-        "voice_handler":    None, # VoiceHandler instance
-        "voice_last_audio": None, # hash of last processed audio — prevents duplicate processing
     }
     for k, v in defaults.items():
         if k not in st.session_state:
