@@ -9,3 +9,4 @@ tqdm==4.66.4
 rich==13.7.1
 social-interaction-cloud
 flask
+streamlit
