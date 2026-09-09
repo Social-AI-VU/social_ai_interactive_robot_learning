@@ -2,11 +2,11 @@ import time
 import threading
 import os
 import numpy as np
-from control.demo_recorder import KinestheticDemoRecorder
+from scripts.demo_recorder import KinestheticDemoRecorder
 
 ROBOT_IP  = "172.16.0.2"
 RECORD_HZ = 20
-DATA_DIR  = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
+DATA_DIR  = os.path.join(os.path.dirname(__file__), '..', 'data')
 
 # Reach task table bounds (robot base frame, metres)
 TABLE_X_MIN = 0.25

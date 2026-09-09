@@ -2,7 +2,7 @@ import gymnasium as gym
 
 from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
-from franka_reach.franka_reach_env import FrankaReachEnv
+from environments.reach.franka_reach_env import FrankaReachEnv
 
 # some imports are in the code so that not everything is imported when the real robot, spacemouse etc. 
 # is not connected, which would cause issues
@@ -14,13 +14,13 @@ USE_WEB = True
 def main():
 
     if USE_WEB:
-        from feedback.web_reward import WebRewardSource
+        from rewards.web_reward import WebRewardSource
         reward_source = (
             WebRewardSource()
         )
     else:
         from sic_framework.devices.desktop import Desktop
-        from feedback.spacemouse_reward import SpacemouseRewardSource
+        from rewards.spacemouse_reward import SpacemouseRewardSource
         desktop = Desktop()
         reward_source = (
             SpacemouseRewardSource(

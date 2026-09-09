@@ -23,8 +23,9 @@ DEMOS_DIR     = Path("data")
 MODELS_DIR    = Path("models")
 CONFIG_DIR    = Path("config")
 ASSETS_DIR    = Path(__file__).parent / "assets"
-RECORDER_PATH = Path(__file__).parent / "src/robot_control/demo_recorder.py"
-EXECUTE_PATH  = Path(__file__).parent / "src/learning/execute_policy.py"
+REPO_ROOT     = Path(__file__).resolve().parent.parent
+RECORDER_PATH = REPO_ROOT / "scripts" / "demo_recorder.py"
+EXECUTE_PATH  = REPO_ROOT / "learning" / "execute_policy.py"
 
 # Maps UI task names to robosuite env names
 TASK_TO_ENV = {
@@ -161,7 +162,7 @@ def task_to_env(task_name: str) -> str:
     return TASK_TO_ENV.get(key, "Sandbox")
 
 
-BASE_CONFIG_PATH = Path(__file__).parent / "src/learning/train_bc_rnn.json"
+BASE_CONFIG_PATH = REPO_ROOT / "learning" / "train_bc_rnn.json"
 
 
 def generate_train_config(task_name: str, dataset_path: Path,

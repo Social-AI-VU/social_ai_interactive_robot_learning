@@ -1,7 +1,7 @@
-# feedback/spacemouse_reward.py
+# rewards/spacemouse_reward.py
 
-from feedback.feedback_queue import feedback_queue
-from feedback.reward_source import RewardSource
+from rewards.feedback_queue import feedback_queue
+from rewards.reward_source import RewardSource
 
 
 class SpacemouseRewardSource(RewardSource):

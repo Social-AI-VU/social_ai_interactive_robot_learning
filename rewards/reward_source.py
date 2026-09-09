@@ -1,4 +1,4 @@
-# feedback/reward_source.py
+# rewards/reward_source.py
 
 from abc import ABC, abstractmethod
 

@@ -1,7 +1,7 @@
 import gymnasium as gym
 import numpy as np
 
-from feedback.feedback_queue import (
+from rewards.feedback_queue import (
     feedback_queue,
 )
 

@@ -5,7 +5,7 @@ No camera, state-based observations only.
 
 Usage:
     import robosuite as suite
-    from src.simulation.reach_env import ReachTask
+    from environments.reach.reach_env import ReachTask
 
     env = suite.make("ReachTask", robots="Panda", has_renderer=True, ...)
 """
