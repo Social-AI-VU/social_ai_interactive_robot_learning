@@ -1,6 +1,6 @@
 """
 Robot LfD UI - Streamlit interface for demo recording, training, and policy execution.
-Run with: streamlit run ui.py
+Run with: streamlit run ui/ui_two_step.py (from the repo root)
 """
 
 import streamlit as st
@@ -18,24 +18,30 @@ from pathlib import Path
 _log_queue: queue.Queue = queue.Queue()
 
 # Config
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    # ui/ scripts are launched with only ui/ on sys.path, so imports of our
+    # own packages (environments, robot, rewards, scripts, learning) need
+    # the repo root added explicitly.
+    sys.path.insert(0, str(REPO_ROOT))
+
 ROBOT_IP      = "172.16.0.2"
-DEMOS_DIR     = Path("data")
-MODELS_DIR    = Path("models")
-CONFIG_DIR    = Path("config")
+DEMOS_DIR     = REPO_ROOT / "data"
+MODELS_DIR    = REPO_ROOT / "models"
+CONFIG_DIR    = REPO_ROOT / "config"
 ASSETS_DIR    = Path(__file__).parent / "assets"
-REPO_ROOT     = Path(__file__).resolve().parent.parent
 RECORDER_PATH = REPO_ROOT / "scripts" / "demo_recorder.py"
 EXECUTE_PATH  = REPO_ROOT / "learning" / "execute_policy.py"
 
-# Maps UI task names to robosuite env names
-TASK_TO_ENV = {
-    "reach": "ReachTask",
-    "push": "PushTask",
-    "lift": "Lift",
-    "nut": "Nut",
-    "stack": "Stack",
-    "wave": "Playground",
-    "playground": "Playground",
+# Environments wired up end-to-end for this UI (env definition + a robot to run
+# it on). Add an entry here once a new task under environments/ is ready to be
+# driven from this UI - it will then show up in the Environment picker below.
+ENVIRONMENTS = {
+    "reach": {
+        "label": "Reach",
+        "sim_env_name": "ReachTask",  # robosuite env registered in environments/reach/reach_env.py
+        "robot": "Franka Panda",
+    },
 }
 
 DEMOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -61,8 +67,11 @@ def init_state():
         "training":            False,
         "executing":           False,
         "current_task":        None,
+        "environment":         next(iter(ENVIRONMENTS)),
+        "robot_ip":            ROBOT_IP,
         "mode":                "Simulation",   # Real Robot or Simulation
         "input_mode":          "Joint",
+        "ui_page":              "configuration",
         "teaching_signal":     "evaluative",
         "evaluative_method":   "deep tamer",
         "log":                 [],
@@ -156,10 +165,9 @@ def run_in_thread(fn, *args):
     t = threading.Thread(target=fn, args=args, daemon=True)
     t.start()
 
-def task_to_env(task_name: str) -> str:
-    """Map a UI task name to its robosuite environment name."""
-    key = task_name.strip().lower()
-    return TASK_TO_ENV.get(key, "Sandbox")
+def get_environment_config():
+    """Return the registry entry for the environment chosen on the configuration page."""
+    return ENVIRONMENTS[st.session_state.environment]
 
 
 BASE_CONFIG_PATH = REPO_ROOT / "learning" / "train_bc_rnn.json"
@@ -235,15 +243,16 @@ def get_merged_path(task_name: str) -> Path:
 
 def launch_sim_collection(task_name: str, env_name: str):
     """
-    Open a new terminal window running robosuite collection script.
-    Uses collect_human_demonstrations.py whith custom and already avaiable envs.
+    Open a new terminal window running our collect_human_demonstrations script.
+    Run as `-m` from the repo root so `environments` is importable and the
+    custom robosuite task (e.g. ReachTask) is registered before use.
     Returns the Popen object for the terminal.
     """
     output_dir = str((DEMOS_DIR / task_name).resolve())
     python = sys.executable
     cmd_inner = (
-        f"cd {Path(__file__).parent.resolve()} && "
-        f"{python} -m robosuite.scripts.collect_human_demonstrations "
+        f"cd {REPO_ROOT} && "
+        f"{python} -m input_devices.collect_human_demonstrations "
         f"--environment {env_name} "
         f"--robots Panda "
         f"--device spacemouse "
@@ -292,7 +301,7 @@ def process_sim_demos(demo_path: Path):
 
     subprocess.Popen(
         ["gnome-terminal", "--", "bash", "-c", bash_cmd],
-        cwd=str(Path(__file__).parent)
+        cwd=str(REPO_ROOT)
     )
     log("Processing started in a new terminal window.")
     log("When done, click Refresh to check if obs.hdf5 is ready.")
@@ -327,7 +336,227 @@ def sim_preview(task_name: str):
             unsafe_allow_html=True,
         )
 
-# Main UI 
+# Main UI
+
+def _show_configuration_page():
+    """First page: collect all configuration choices before entering the workspace."""
+    st.title("Robot Learning from Demonstration")
+    st.subheader("1. Configuration")
+    st.caption(
+        "Choose the environment, input, teaching signal, and task first. "
+        "These choices are then used by the workspace on the next page."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### Environment")
+        env_keys = list(ENVIRONMENTS.keys())
+        environment = st.selectbox(
+            "Environment",
+            env_keys,
+            index=env_keys.index(st.session_state.environment),
+            format_func=lambda k: ENVIRONMENTS[k]["label"],
+            key="config_environment",
+            label_visibility="collapsed",
+        )
+        st.session_state.environment = environment
+        env_cfg = ENVIRONMENTS[environment]
+        st.caption(f"Robot: **{env_cfg['robot']}**")
+
+        st.markdown("### Robot Mode")
+        mode = st.radio(
+            "Robot mode",
+            ["Simulation", "Real Robot"],
+            index=1 if st.session_state.mode == "Real Robot" else 0,
+            horizontal=True,
+            key="config_mode",
+            label_visibility="collapsed",
+        )
+        st.session_state.mode = mode
+
+        if mode == "Real Robot":
+            st.info(f"Real Robot — kinesthetic teaching on {env_cfg['robot']}.")
+        else:
+            st.info("Simulation — robosuite SpaceMouse collection.")
+
+        st.markdown("### Input")
+        input_mode = st.radio(
+            "Input mode",
+            ["Joint", "Image"],
+            index=0 if st.session_state.input_mode == "Joint" else 1,
+            horizontal=True,
+            key="config_input_mode",
+        )
+        st.session_state.input_mode = input_mode
+
+    with col2:
+        st.markdown("### Teaching Signal")
+        teaching_signal = st.selectbox(
+            "Teaching signal",
+            ["evaluative", "demonstrations", "corrective", "rankings"],
+            index=[
+                "evaluative",
+                "demonstrations",
+                "corrective",
+                "rankings",
+            ].index(st.session_state.teaching_signal),
+            key="config_teaching_signal",
+        )
+        st.session_state.teaching_signal = teaching_signal
+
+        if teaching_signal == "evaluative":
+            evaluative_method = st.selectbox(
+                "Evaluation method",
+                ["deep tamer", "tamer with shaping"],
+                index=[
+                    "deep tamer",
+                    "tamer with shaping",
+                ].index(st.session_state.evaluative_method),
+                key="config_evaluative_method",
+            )
+            st.session_state.evaluative_method = evaluative_method
+
+        st.markdown("### Task")
+        tasks = get_tasks()
+
+        new_task = st.text_input(
+            "New task name",
+            key="config_new_task",
+            placeholder="e.g. push",
+        )
+        if st.button("Create task", key="config_create_task"):
+            task_name = new_task.strip().replace(" ", "_")
+            if task_name:
+                task_dir = DEMOS_DIR / task_name
+                task_dir.mkdir(parents=True, exist_ok=True)
+                st.session_state.current_task = task_name
+                log(f"Created task: {task_name}")
+                st.rerun()
+            else:
+                st.warning("Enter a task name first.")
+
+        tasks = get_tasks()
+        if tasks:
+            selected = st.selectbox(
+                "Task",
+                tasks,
+                index=(
+                    tasks.index(st.session_state.current_task)
+                    if st.session_state.current_task in tasks
+                    else 0
+                ),
+                key="config_task",
+            )
+            if selected != st.session_state.current_task:
+                st.session_state.current_task = selected
+                log(f"Switched to task: {selected}")
+
+            if st.session_state.current_task:
+                st.metric(
+                    "Demonstrations recorded",
+                    get_demo_count(st.session_state.current_task),
+                )
+        else:
+            st.info("No tasks yet. Create one above.")
+
+    if st.session_state.mode == "Real Robot":
+        st.divider()
+        st.markdown("### Robot Connection")
+
+        robot_ip = st.text_input(
+            "Robot IP",
+            value=st.session_state.robot_ip,
+            disabled=st.session_state.robot_connected,
+            key="config_robot_ip",
+        )
+        st.session_state.robot_ip = robot_ip
+
+        robot_color = "🟢" if st.session_state.robot_connected else "🔴"
+        status = "Connected" if st.session_state.robot_connected else "Disconnected"
+        st.markdown(f"{robot_color} **{status}**")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(
+                "Connect",
+                disabled=st.session_state.robot_connected,
+                key="config_connect",
+            ):
+                with st.spinner(f"Connecting to robot at {robot_ip}..."):
+                    try:
+                        import panda_py
+                        from panda_py import libfranka
+                        st.session_state.panda = panda_py.Panda(robot_ip)
+                        st.session_state.gripper = libfranka.Gripper(robot_ip)
+                        st.session_state.robot_connected = True
+                        log(f"Connected to Franka at {robot_ip}")
+                    except Exception as e:
+                        log(f"Connection failed: {e}")
+                        st.error(f"Connection failed: {e}")
+                st.rerun()
+
+        with col2:
+            if st.button(
+                "Disconnect",
+                disabled=not st.session_state.robot_connected,
+                key="config_disconnect",
+            ):
+                st.session_state.robot_connected = False
+                st.session_state.panda = None
+                st.session_state.gripper = None
+                log("Disconnected")
+                st.rerun()
+
+    st.divider()
+
+    # Configuration summary before entering the workspace.
+    st.markdown("### Configuration Summary")
+    summary_cols = st.columns(5)
+    summary_cols[0].metric("Environment", ENVIRONMENTS[st.session_state.environment]["label"])
+    summary_cols[1].metric("Robot Mode", st.session_state.mode)
+    summary_cols[2].metric("Input", st.session_state.input_mode)
+    summary_cols[3].metric("Teaching", st.session_state.teaching_signal)
+    summary_cols[4].metric(
+        "Task",
+        st.session_state.current_task or "Not selected",
+    )
+
+    if st.session_state.teaching_signal == "evaluative":
+        st.caption(
+            f"Evaluation method: **{st.session_state.evaluative_method}**"
+        )
+
+    needs_robot = st.session_state.mode == "Real Robot" and not st.session_state.robot_connected
+
+    if not st.session_state.current_task:
+        st.warning("Select or create a task before continuing.")
+    if needs_robot:
+        st.warning("Connect to the robot before continuing.")
+
+    if st.button(
+        "Continue to Workspace →",
+        type="primary",
+        disabled=not st.session_state.current_task or needs_robot,
+        use_container_width=True,
+        key="config_continue",
+    ):
+        # Set up the experiment: make sure its data directory exists so the
+        # workspace page (and any background recorder/collection process it
+        # launches) has somewhere to write to right away.
+        (DEMOS_DIR / st.session_state.current_task).mkdir(parents=True, exist_ok=True)
+
+        log(
+            "Configuration confirmed: "
+            f"environment={st.session_state.environment}, "
+            f"mode={st.session_state.mode}, "
+            f"input={st.session_state.input_mode}, "
+            f"teaching={st.session_state.teaching_signal}, "
+            f"task={st.session_state.current_task}"
+        )
+        st.session_state.ui_page = "workspace"
+        st.rerun()
+
 
 def main():
     init_state()
@@ -341,13 +570,9 @@ def main():
 
     st.markdown("""
         <style>
-            /* Sidebar text */
-            [data-testid="stSidebar"] * {
-                font-size: 17px !important;
-            }
-            [data-testid="stSidebar"] .stMetric label,
-            [data-testid="stSidebar"] .stMetric div {
-                font-size: 18px !important;
+            /* General text */
+            .stApp * {
+                font-size: 17px;
             }
 
             /* Tab labels */
@@ -355,158 +580,63 @@ def main():
                 font-size: 18px !important;
                 padding: 12px 24px !important;
             }
+
+            /* Configuration metric values */
+            [data-testid="stMetricValue"] {
+                font-size: 24px !important;
+            }
         </style>
     """, unsafe_allow_html=True)
 
+    if st.session_state.ui_page == "configuration":
+        _show_configuration_page()
+        return
+
+    # ---------------------------------------------------------------
+    # Workspace page
+    # ---------------------------------------------------------------
     st.title("Robot Learning from Demonstration")
 
-    # Sidebar 
-    with st.sidebar:
-
-        # Mode toggle - top of sidebar, always visible
-        st.header("Mode")
-        mode = st.radio(
-            "Environment",
-            ["Simulation", "Real Robot"],
-            index=1 if st.session_state.mode == "Real Robot" else 0,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        if mode != st.session_state.mode:
-            st.session_state.mode = mode
-            log(f"Switched to {mode} mode")
+    back_col, status_col = st.columns([1, 5])
+    with back_col:
+        if st.button("← Configuration", key="back_to_config"):
+            st.session_state.ui_page = "configuration"
             st.rerun()
 
-        if st.session_state.mode == "Real Robot":
-            st.markdown("**Real Robot** - kinesthetic teaching on Franka")
-        else:
-            st.markdown("**Simulation** - robosuite SpaceMouse collection")
-
-        st.divider()
-
-        # Input Mode
-        st.header("Input Mode")
-        input_mode = st.radio(
-            "Input",
-            ["Joint", "Image"],
-            index=0 if st.session_state.input_mode == "Joint" else 1,
-            horizontal=True,
-            label_visibility="collapsed",
+    with status_col:
+        st.markdown(
+            f"**{ENVIRONMENTS[st.session_state.environment]['label']}** · "
+            f"**{st.session_state.mode}** · "
+            f"**{st.session_state.input_mode} input** · "
+            f"**{st.session_state.teaching_signal} teaching** · "
+            f"**Task:** `{st.session_state.current_task}`"
         )
 
-        if input_mode != st.session_state.input_mode:
-            st.session_state.input_mode = input_mode
-            log(f"Input mode changed to {input_mode}")
-            st.rerun()
+    # The workspace is deliberately based on the choices made on page 1.
+    if st.session_state.mode == "Real Robot":
+        mode_description = "Franka / real-robot workflow"
+    else:
+        mode_description = "robosuite / simulation workflow"
 
+    teaching_description = {
+        "evaluative": "evaluative feedback",
+        "demonstrations": "demonstration-based teaching",
+        "corrective": "corrective teaching",
+        "rankings": "ranking-based teaching",
+    }[st.session_state.teaching_signal]
 
-        st.divider()
-
-        # Teaching Signal
-        st.header("Teaching Signal")
-
-        teaching_signal = st.selectbox(
-            "Teaching Signal",
-            [
-                "evaluative",
-                "demonstrations",
-                "corrective",
-                "rankings",
-            ],
-            index=[
-                "evaluative",
-                "demonstrations",
-                "corrective",
-                "rankings",
-            ].index(st.session_state.teaching_signal),
+    if st.session_state.teaching_signal == "evaluative":
+        teaching_description += (
+            f" ({st.session_state.evaluative_method})"
         )
 
-        st.session_state.teaching_signal = teaching_signal
+    st.info(
+        f"**Current configuration:** {mode_description}, "
+        f"{st.session_state.input_mode.lower()} input, "
+        f"{teaching_description}."
+    )
 
-        if teaching_signal == "evaluative":
-            evaluative_method = st.selectbox(
-                "Evaluation Method",
-                [
-                    "deep tamer",
-                    "tamer with shaping",
-                ],
-                index=[
-                    "deep tamer",
-                    "tamer with shaping",
-                ].index(st.session_state.evaluative_method),
-            )
-            st.session_state.evaluative_method = evaluative_method
-
-        # Robot connection (only relevant in real robot mode)
-        if st.session_state.mode == "Real Robot":
-            st.header("Connection")
-            robot_color = "🟢" if st.session_state.robot_connected else "🔴"
-            st.markdown(
-                f"{robot_color} {'Connected' if st.session_state.robot_connected else 'Disconnected'}"
-            )
-
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Connect", disabled=st.session_state.robot_connected):
-                    try:
-                        import panda_py
-                        from panda_py import libfranka
-                        st.session_state.panda   = panda_py.Panda(ROBOT_IP)
-                        st.session_state.gripper = libfranka.Gripper(ROBOT_IP)
-                        st.session_state.robot_connected = True
-                        log(f"Connected to Franka at {ROBOT_IP}")
-                    except Exception as e:
-                        log(f"Connection failed: {e}")
-            with col2:
-                if st.button("Disconnect", disabled=not st.session_state.robot_connected):
-                    st.session_state.robot_connected = False
-                    st.session_state.panda   = None
-                    st.session_state.gripper = None
-                    log("Disconnected")
-
-            st.divider()
-
-        # Mode indicator
-        if st.session_state.recording:
-            st.markdown("🔴 **Recording**")
-        elif st.session_state.training:
-            st.markdown("🔵 **Training**")
-        elif st.session_state.executing:
-            st.markdown("🟡 **Executing**")
-        else:
-            st.markdown("⚪ **Idle**")
-
-        st.divider()
-
-        # Task management
-        st.header("Tasks")
-        tasks = get_tasks()
-
-        new_task = st.text_input("New task name")
-        if st.button("Create task") and new_task.replace(" ","_"):
-            task_dir = DEMOS_DIR / new_task.replace(" ","_")
-            task_dir.mkdir(parents=True, exist_ok=True)
-            st.session_state.current_task = new_task.replace(" ","_")
-            st.rerun()
-
-        if tasks:
-            selected = st.selectbox(
-                "Select task",
-                tasks,
-                index=tasks.index(st.session_state.current_task)
-                      if st.session_state.current_task in tasks else 0,
-            )
-            if selected != st.session_state.current_task:
-                st.session_state.current_task = selected
-                log(f"Switched to task: {selected}")
-
-            if st.session_state.current_task:
-                n = get_demo_count(st.session_state.current_task)
-                st.metric("Demos recorded", n)
-        else:
-            st.info("No tasks yet. Create one above.")
-
-    # Main tabs 
+# Main tabs 
     tab_record, tab_train, tab_execute, tab_log = st.tabs(
         ["⏺ Record", "⚙ Train", "▶ Execute", "📋 Log"]
     )
@@ -543,8 +673,8 @@ def main():
                         type="primary",
                     ):
                         try:
-                            from src.robot_control.demo_recorder import KinestheticDemoRecorder
-                            rec = KinestheticDemoRecorder(robot_ip=ROBOT_IP)
+                            from scripts.demo_recorder import KinestheticDemoRecorder
+                            rec = KinestheticDemoRecorder(robot_ip=st.session_state.robot_ip)
                             rec.panda = st.session_state.panda
                             rec.gripper = st.session_state.gripper
                             rec.enable_teaching_mode()
@@ -588,7 +718,7 @@ def main():
             else:
                 # Simulation recording
                 task_name = st.session_state.current_task
-                env_name  = task_to_env(task_name)
+                env_name  = get_environment_config()["sim_env_name"]
 
                 col_info, col_preview = st.columns([1, 1])
 
@@ -682,7 +812,7 @@ def main():
                     ):
                         merged_path.parent.mkdir(parents=True, exist_ok=True)
                         obs_path = latest_demo.parent / "obs.hdf5"
-                        merge_script = str(Path(__file__).parent / "merge_demos.py")
+                        merge_script = str(REPO_ROOT / "scripts" / "merge_demos.py")
 
                         # Step 1: process latest demo.hdf5 → obs.hdf5
                         cmd1 = " ".join([
@@ -717,7 +847,7 @@ def main():
                         )
                         subprocess.Popen(
                             ["gnome-terminal", "--", "bash", "-c", bash_cmd],
-                            cwd=str(Path(__file__).parent)
+                            cwd=str(REPO_ROOT)
                         )
                         log("Process & Merge started in a new terminal.")
                         st.rerun()
@@ -828,7 +958,7 @@ def main():
 
                     subprocess.Popen(
                         ["gnome-terminal", "--", "bash", "-c", bash_cmd],
-                        cwd=str(Path(__file__).parent)
+                        cwd=str(REPO_ROOT)
                     )
                     extra = f"(continuing from epoch {last_epoch})" if is_resume else ""
                     log(f"Training started in a new terminal - {n_epochs} epochs {extra}")
@@ -905,7 +1035,7 @@ def main():
 
                             subprocess.Popen(
                                 ["gnome-terminal", "--", "bash", "-c", bash_cmd],
-                                cwd=str(Path(__file__).parent)
+                                cwd=str(REPO_ROOT)
                             )
                             log(f"Policy execution started in a new terminal.")
                             st.session_state.executing = False
@@ -940,7 +1070,7 @@ def main():
 
                     subprocess.Popen(
                         ["gnome-terminal", "--", "bash", "-c", bash_cmd],
-                        cwd=str(Path(__file__).parent)
+                        cwd=str(REPO_ROOT)
                     )
                     log("Sim execution started in a new terminal.")
 
@@ -953,6 +1083,8 @@ def main():
             st.session_state.log = []
         log_text = "\n".join(reversed(st.session_state.log)) if st.session_state.log else "No activity yet."
         st.text_area("Log", value=log_text, height=400, label_visibility="collapsed")
+
+
 
 
 if __name__ == "__main__":

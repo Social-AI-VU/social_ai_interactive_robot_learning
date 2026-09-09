@@ -25,6 +25,8 @@ from robosuite.controllers import load_composite_controller_config
 from robosuite.controllers.composite.composite_controller import WholeBody
 from robosuite.wrappers import DataCollectionWrapper, VisualizationWrapper
 
+import environments.reach.reach_env  # noqa: F401  registers "ReachTask" with robosuite
+
 
 def collect_human_trajectory(env, device, arm, max_fr, goal_update_mode,
                              demo_num=None, target=None):
