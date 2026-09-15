@@ -1,6 +1,7 @@
 gymnasium==0.29.1
 stable-baselines3==2.3.2
 gymnasium-robotics[mujoco]
+panda-gym
 numpy==1.26.4
 scipy==1.13.1
 pyspacemouse==1.1.4
