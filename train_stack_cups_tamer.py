@@ -1,3 +1,5 @@
+import argparse
+
 import gymnasium as gym
 
 from environments.stack_cups.franka_stack_cups_env import FrankaStackCupsEnv
@@ -10,12 +12,19 @@ from rewards.web_reward import WebRewardSource
 # script is sim-only for now. See docs/adding_environments_tasks_learners.md
 # for how to add a real-robot variant.
 
-MODEL_PATH = "stack_cups_tamer.pt"
 MAX_EPISODES = 200
 MAX_STEPS_PER_EPISODE = 150
 
 
 def main():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output",
+        default="stack_cups_tamer.pt",
+        help="Where to save the trained TAMER model.",
+    )
+    args = parser.parse_args()
 
     reward_source = WebRewardSource()
     reward_source.start()
@@ -73,11 +82,11 @@ def main():
 
     finally:
 
-        learner.save(MODEL_PATH)
+        learner.save(args.output)
 
         print(
             f"\nModel saved to "
-            f"{MODEL_PATH}"
+            f"{args.output}"
         )
 
 

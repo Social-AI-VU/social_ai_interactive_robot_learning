@@ -33,14 +33,49 @@ ASSETS_DIR    = Path(__file__).parent / "assets"
 RECORDER_PATH = REPO_ROOT / "scripts" / "demo_recorder.py"
 EXECUTE_PATH  = REPO_ROOT / "learning" / "execute_policy.py"
 
-# Environments wired up end-to-end for this UI (env definition + a robot to run
-# it on). Add an entry here once a new task under environments/ is ready to be
-# driven from this UI - it will then show up in the Environment picker below.
+# Environments wired up end-to-end for this UI. Add an entry here once a new
+# task under environments/ is ready to be driven from this UI - it will then
+# show up in the Environment picker below. See
+# docs/adding_environments_tasks_learners.md for the full checklist.
+#
+# "track" selects which workspace page this environment gets:
+#   "teleop"  - teleoperated demos -> BC (the Record/Train/Execute/Log tabs
+#               below). Needs "sim_env_name" (the robosuite env registered
+#               under environments/registry.py).
+#   "online"  - a learner picks actions live from human feedback. Needs
+#               "learners" (see LEARNERS below): which learner(s) this
+#               environment can be driven by, and the script that runs each.
 ENVIRONMENTS = {
     "reach": {
         "label": "Reach",
-        "sim_env_name": "ReachTask",  # robosuite env registered in environments/reach/reach_env.py
+        "track": "teleop",
+        "sim_env_name": "ReachTask",  # robosuite env registered in environments/registry.py
         "robot": "Franka Panda",
+    },
+    "stack_cups": {
+        "label": "Stack Cups",
+        "track": "online",
+        "robot": "Franka Panda (sim only)",
+        "learners": {
+            "tamer": {
+                "label": "TAMER",
+                "run_script": "train_stack_cups_tamer.py",
+                "output_name": "stack_cups_tamer.pt",
+                "feedback_url": "http://localhost:5000",
+            },
+        },
+    },
+}
+
+# Learner descriptions shown in the UI. Keyed the same as each environment's
+# "learners" dict above.
+LEARNERS = {
+    "tamer": {
+        "label": "TAMER",
+        "description": (
+            "Learns online from live GOOD/BAD feedback only - no environment "
+            "reward is used. Behaviour starts shifting after the first few clicks."
+        ),
     },
 }
 
@@ -68,6 +103,7 @@ def init_state():
         "executing":           False,
         "current_task":        None,
         "environment":         next(iter(ENVIRONMENTS)),
+        "learner":             None,
         "robot_ip":            ROBOT_IP,
         "mode":                "Simulation",   # Real Robot or Simulation
         "input_mode":          "Joint",
@@ -273,6 +309,38 @@ def launch_sim_collection(task_name: str, env_name: str):
     return proc
 
 
+def launch_online_training(task_name: str, env_key: str, learner_key: str):
+    """
+    Launch an "online" track environment's training script (e.g.
+    train_stack_cups_tamer.py) in a new terminal - same pattern as
+    launch_sim_collection() above, just for a different script. The UI
+    doesn't manage the process after this: close the terminal (or Ctrl+C in
+    it) to stop training. Returns the Popen object for the terminal.
+    """
+    learner_cfg = ENVIRONMENTS[env_key]["learners"][learner_key]
+    script_path = REPO_ROOT / learner_cfg["run_script"]
+    output_path = (MODELS_DIR / task_name / learner_cfg["output_name"]).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    python = sys.executable
+    cmd_inner = (
+        f"cd {REPO_ROOT} && "
+        f"{python} {script_path} --output {output_path}; "
+        f"echo 'Training stopped - press Enter to close'; read"
+    )
+    try:
+        proc = subprocess.Popen(
+            ["gnome-terminal", "--", "bash", "-c", cmd_inner],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        proc = subprocess.Popen(
+            ["xterm", "-e", f"bash -c '{cmd_inner}'"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    return proc
+
+
 def process_sim_demos(demo_path: Path):
     """
     Run dataset_states_to_obs then split_train_val in a new terminal window.
@@ -362,60 +430,84 @@ def _show_configuration_page():
         )
         st.session_state.environment = environment
         env_cfg = ENVIRONMENTS[environment]
+        track = env_cfg.get("track", "teleop")
         st.caption(f"Robot: **{env_cfg['robot']}**")
 
-        st.markdown("### Robot Mode")
-        mode = st.radio(
-            "Robot mode",
-            ["Simulation", "Real Robot"],
-            index=1 if st.session_state.mode == "Real Robot" else 0,
-            horizontal=True,
-            key="config_mode",
-            label_visibility="collapsed",
-        )
-        st.session_state.mode = mode
+        if track == "online":
+            st.markdown("### Learner")
+            learner_keys = list(env_cfg["learners"].keys())
+            default_learner = (
+                st.session_state.learner
+                if st.session_state.learner in learner_keys
+                else learner_keys[0]
+            )
+            learner = st.selectbox(
+                "Learner",
+                learner_keys,
+                index=learner_keys.index(default_learner),
+                format_func=lambda k: env_cfg["learners"][k]["label"],
+                key="config_learner",
+                label_visibility="collapsed",
+            )
+            st.session_state.learner = learner
+            st.info(LEARNERS[learner]["description"])
 
-        if mode == "Real Robot":
-            st.info(f"Real Robot — kinesthetic teaching on {env_cfg['robot']}.")
         else:
-            st.info("Simulation — robosuite SpaceMouse collection.")
+            st.session_state.learner = None
 
-        st.markdown("### Input")
-        input_mode = st.radio(
-            "Input mode",
-            ["Joint", "Image"],
-            index=0 if st.session_state.input_mode == "Joint" else 1,
-            horizontal=True,
-            key="config_input_mode",
-        )
-        st.session_state.input_mode = input_mode
+            st.markdown("### Robot Mode")
+            mode = st.radio(
+                "Robot mode",
+                ["Simulation", "Real Robot"],
+                index=1 if st.session_state.mode == "Real Robot" else 0,
+                horizontal=True,
+                key="config_mode",
+                label_visibility="collapsed",
+            )
+            st.session_state.mode = mode
+
+            if mode == "Real Robot":
+                st.info(f"Real Robot — kinesthetic teaching on {env_cfg['robot']}.")
+            else:
+                st.info("Simulation — robosuite SpaceMouse collection.")
+
+            st.markdown("### Input")
+            input_mode = st.radio(
+                "Input mode",
+                ["Joint", "Image"],
+                index=0 if st.session_state.input_mode == "Joint" else 1,
+                horizontal=True,
+                key="config_input_mode",
+            )
+            st.session_state.input_mode = input_mode
 
     with col2:
-        st.markdown("### Teaching Signal")
-        teaching_signal = st.selectbox(
-            "Teaching signal",
-            ["evaluative", "demonstrations", "corrective", "rankings"],
-            index=[
-                "evaluative",
-                "demonstrations",
-                "corrective",
-                "rankings",
-            ].index(st.session_state.teaching_signal),
-            key="config_teaching_signal",
-        )
-        st.session_state.teaching_signal = teaching_signal
-
-        if teaching_signal == "evaluative":
-            evaluative_method = st.selectbox(
-                "Evaluation method",
-                ["deep tamer", "tamer with shaping"],
+        if track == "teleop":
+            st.markdown("### Teaching Signal")
+            teaching_signal = st.selectbox(
+                "Teaching signal",
+                ["evaluative", "demonstrations", "corrective", "rankings"],
                 index=[
-                    "deep tamer",
-                    "tamer with shaping",
-                ].index(st.session_state.evaluative_method),
-                key="config_evaluative_method",
+                    "evaluative",
+                    "demonstrations",
+                    "corrective",
+                    "rankings",
+                ].index(st.session_state.teaching_signal),
+                key="config_teaching_signal",
             )
-            st.session_state.evaluative_method = evaluative_method
+            st.session_state.teaching_signal = teaching_signal
+
+            if teaching_signal == "evaluative":
+                evaluative_method = st.selectbox(
+                    "Evaluation method",
+                    ["deep tamer", "tamer with shaping"],
+                    index=[
+                        "deep tamer",
+                        "tamer with shaping",
+                    ].index(st.session_state.evaluative_method),
+                    key="config_evaluative_method",
+                )
+                st.session_state.evaluative_method = evaluative_method
 
         st.markdown("### Task")
         tasks = get_tasks()
@@ -453,14 +545,20 @@ def _show_configuration_page():
                 log(f"Switched to task: {selected}")
 
             if st.session_state.current_task:
-                st.metric(
-                    "Demonstrations recorded",
-                    get_demo_count(st.session_state.current_task),
-                )
+                if track == "online":
+                    st.caption(
+                        f"Checkpoints will be saved under "
+                        f"`models/{st.session_state.current_task}/`."
+                    )
+                else:
+                    st.metric(
+                        "Demonstrations recorded",
+                        get_demo_count(st.session_state.current_task),
+                    )
         else:
             st.info("No tasks yet. Create one above.")
 
-    if st.session_state.mode == "Real Robot":
+    if track == "teleop" and st.session_state.mode == "Real Robot":
         st.divider()
         st.markdown("### Robot Connection")
 
@@ -512,50 +610,133 @@ def _show_configuration_page():
 
     # Configuration summary before entering the workspace.
     st.markdown("### Configuration Summary")
-    summary_cols = st.columns(5)
-    summary_cols[0].metric("Environment", ENVIRONMENTS[st.session_state.environment]["label"])
-    summary_cols[1].metric("Robot Mode", st.session_state.mode)
-    summary_cols[2].metric("Input", st.session_state.input_mode)
-    summary_cols[3].metric("Teaching", st.session_state.teaching_signal)
-    summary_cols[4].metric(
-        "Task",
-        st.session_state.current_task or "Not selected",
-    )
-
-    if st.session_state.teaching_signal == "evaluative":
-        st.caption(
-            f"Evaluation method: **{st.session_state.evaluative_method}**"
+    if track == "online":
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Environment", env_cfg["label"])
+        summary_cols[1].metric(
+            "Learner",
+            LEARNERS[st.session_state.learner]["label"] if st.session_state.learner else "Not selected",
+        )
+        summary_cols[2].metric("Task", st.session_state.current_task or "Not selected")
+    else:
+        summary_cols = st.columns(5)
+        summary_cols[0].metric("Environment", env_cfg["label"])
+        summary_cols[1].metric("Robot Mode", st.session_state.mode)
+        summary_cols[2].metric("Input", st.session_state.input_mode)
+        summary_cols[3].metric("Teaching", st.session_state.teaching_signal)
+        summary_cols[4].metric(
+            "Task",
+            st.session_state.current_task or "Not selected",
         )
 
-    needs_robot = st.session_state.mode == "Real Robot" and not st.session_state.robot_connected
+        if st.session_state.teaching_signal == "evaluative":
+            st.caption(
+                f"Evaluation method: **{st.session_state.evaluative_method}**"
+            )
+
+    needs_robot = (
+        track == "teleop"
+        and st.session_state.mode == "Real Robot"
+        and not st.session_state.robot_connected
+    )
+    needs_learner = track == "online" and not st.session_state.learner
 
     if not st.session_state.current_task:
         st.warning("Select or create a task before continuing.")
     if needs_robot:
         st.warning("Connect to the robot before continuing.")
+    if needs_learner:
+        st.warning("Select a learner before continuing.")
 
     if st.button(
         "Continue to Workspace →",
         type="primary",
-        disabled=not st.session_state.current_task or needs_robot,
+        disabled=not st.session_state.current_task or needs_robot or needs_learner,
         use_container_width=True,
         key="config_continue",
     ):
-        # Set up the experiment: make sure its data directory exists so the
-        # workspace page (and any background recorder/collection process it
-        # launches) has somewhere to write to right away.
+        # Set up the experiment: make sure its data/model directories exist
+        # so the workspace page (and any background process it launches)
+        # has somewhere to write to right away.
         (DEMOS_DIR / st.session_state.current_task).mkdir(parents=True, exist_ok=True)
+        (MODELS_DIR / st.session_state.current_task).mkdir(parents=True, exist_ok=True)
 
-        log(
-            "Configuration confirmed: "
-            f"environment={st.session_state.environment}, "
-            f"mode={st.session_state.mode}, "
-            f"input={st.session_state.input_mode}, "
-            f"teaching={st.session_state.teaching_signal}, "
-            f"task={st.session_state.current_task}"
-        )
+        log_parts = [f"environment={st.session_state.environment}"]
+        if track == "online":
+            log_parts.append(f"learner={st.session_state.learner}")
+        else:
+            log_parts.append(f"mode={st.session_state.mode}")
+            log_parts.append(f"input={st.session_state.input_mode}")
+            log_parts.append(f"teaching={st.session_state.teaching_signal}")
+        log_parts.append(f"task={st.session_state.current_task}")
+
+        log("Configuration confirmed: " + ", ".join(log_parts))
         st.session_state.ui_page = "workspace"
         st.rerun()
+
+
+def _show_online_workspace(env_cfg):
+    """
+    Workspace page for "online" track environments (e.g. Stack Cups +
+    TAMER). There's no Record/Train/Execute pipeline here - the learner
+    picks actions and updates itself in one live loop, so "running the
+    experiment" just means launching that script (see
+    launch_online_training()) and giving feedback while it runs.
+    """
+    learner_key = st.session_state.learner
+    learner_cfg = env_cfg["learners"][learner_key]
+
+    tab_train, tab_log = st.tabs(["▶ Live Training", "📋 Log"])
+
+    with tab_train:
+        st.header(f"{env_cfg['label']} — {LEARNERS[learner_key]['label']}")
+        st.info(LEARNERS[learner_key]["description"])
+
+        st.markdown(
+            f"Launching this runs `{learner_cfg['run_script']}` in a new "
+            "terminal window, which opens its own simulation window (and, "
+            "for TAMER, a feedback page). There's no separate training "
+            "phase - the robot starts acting and learning from your "
+            "feedback immediately."
+        )
+
+        if st.button("▶ Launch Training", type="primary", key="btn_launch_online"):
+            try:
+                launch_online_training(
+                    st.session_state.current_task,
+                    st.session_state.environment,
+                    learner_key,
+                )
+                log(
+                    f"Launched {learner_cfg['run_script']} "
+                    f"for task '{st.session_state.current_task}'"
+                )
+            except Exception as e:
+                log(f"Failed to launch training: {e}")
+                st.error(f"Failed to launch training: {e}")
+
+        if "feedback_url" in learner_cfg:
+            st.markdown(f"Give feedback at: {learner_cfg['feedback_url']}")
+
+        st.caption(
+            "The model is saved to "
+            f"`models/{st.session_state.current_task}/{learner_cfg['output_name']}` "
+            "when the terminal is closed (or Ctrl+C there) - there's no "
+            "programmatic stop from here yet."
+        )
+
+    with tab_log:
+        st.header("Activity Log")
+        if st.button("Clear log", key="btn_clear_log_online"):
+            st.session_state.log = []
+        log_text = (
+            "\n".join(reversed(st.session_state.log))
+            if st.session_state.log else "No activity yet."
+        )
+        st.text_area(
+            "Log", value=log_text, height=400,
+            label_visibility="collapsed", key="log_area_online",
+        )
 
 
 def main():
@@ -597,6 +778,9 @@ def main():
     # ---------------------------------------------------------------
     st.title("Robot Learning from Demonstration")
 
+    env_cfg = ENVIRONMENTS[st.session_state.environment]
+    track = env_cfg.get("track", "teleop")
+
     back_col, status_col = st.columns([1, 5])
     with back_col:
         if st.button("← Configuration", key="back_to_config"):
@@ -604,13 +788,28 @@ def main():
             st.rerun()
 
     with status_col:
-        st.markdown(
-            f"**{ENVIRONMENTS[st.session_state.environment]['label']}** · "
-            f"**{st.session_state.mode}** · "
-            f"**{st.session_state.input_mode} input** · "
-            f"**{st.session_state.teaching_signal} teaching** · "
-            f"**Task:** `{st.session_state.current_task}`"
-        )
+        if track == "online":
+            learner_label = (
+                LEARNERS[st.session_state.learner]["label"]
+                if st.session_state.learner else "?"
+            )
+            st.markdown(
+                f"**{env_cfg['label']}** · "
+                f"**{learner_label} (online learning)** · "
+                f"**Task:** `{st.session_state.current_task}`"
+            )
+        else:
+            st.markdown(
+                f"**{env_cfg['label']}** · "
+                f"**{st.session_state.mode}** · "
+                f"**{st.session_state.input_mode} input** · "
+                f"**{st.session_state.teaching_signal} teaching** · "
+                f"**Task:** `{st.session_state.current_task}`"
+            )
+
+    if track == "online":
+        _show_online_workspace(env_cfg)
+        return
 
     # The workspace is deliberately based on the choices made on page 1.
     if st.session_state.mode == "Real Robot":
