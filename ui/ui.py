@@ -42,9 +42,12 @@ EXECUTE_PATH  = REPO_ROOT / "learning" / "execute_policy.py"
 #   "teleop"  - teleoperated demos -> BC (the Record/Train/Execute/Log tabs
 #               below). Needs "sim_env_name" (the robosuite env registered
 #               under environments/registry.py).
-#   "online"  - a learner picks actions live from human feedback. Needs
-#               "learners" (see LEARNERS below): which learner(s) this
-#               environment can be driven by, and the script that runs each.
+#   "online"  - any LEARNERS entry (below) picks actions live from human
+#               feedback, run generically by train_online.py. Needs no
+#               per-environment learner list - every online-track
+#               environment is combinable with every registered learner
+#               (see environments/factory.py); it's up to whoever runs it to
+#               judge whether a given combination makes sense.
 ENVIRONMENTS = {
     "reach": {
         "label": "Reach",
@@ -52,23 +55,25 @@ ENVIRONMENTS = {
         "sim_env_name": "ReachTask",  # robosuite env registered in environments/registry.py
         "robot": "Franka Panda",
     },
+    "reach_online": {
+        # A separate entry from "reach" above since it's a different
+        # environment class (FrankaReachEnv, not the robosuite ReachTask) -
+        # see docs/adding_environments_tasks_learners.md for why the two
+        # tracks don't share one. This key must match an entry in
+        # environments/factory.py's ENVIRONMENT_BUILDERS.
+        "label": "Reach (Online)",
+        "track": "online",
+        "robot": "Franka Panda (sim only)",
+    },
     "stack_cups": {
         "label": "Stack Cups",
         "track": "online",
         "robot": "Franka Panda (sim only)",
-        "learners": {
-            "tamer": {
-                "label": "TAMER",
-                "run_script": "train_stack_cups_tamer.py",
-                "output_name": "stack_cups_tamer.pt",
-                "feedback_url": "http://localhost:5000",
-            },
-        },
     },
 }
 
-# Learner descriptions shown in the UI. Keyed the same as each environment's
-# "learners" dict above.
+# Every learner here is combinable with every "online" track environment
+# above, run via train_online.py --environment <env> --learner <learner>.
 LEARNERS = {
     "tamer": {
         "label": "TAMER",
@@ -76,6 +81,17 @@ LEARNERS = {
             "Learns online from live GOOD/BAD feedback only - no environment "
             "reward is used. Behaviour starts shifting after the first few clicks."
         ),
+        "feedback_url": "http://localhost:5000",
+    },
+    "sac": {
+        "label": "SAC (RL)",
+        "description": (
+            "Trains a Soft Actor-Critic policy (stable-baselines3) against the "
+            "environment's own reward, optionally shaped by live human feedback. "
+            "Bootstraps across steps like standard RL, unlike TAMER's greedy "
+            "policy - expect it to need far more steps before behaviour changes."
+        ),
+        "feedback_url": "http://localhost:5000",
     },
 }
 
@@ -309,23 +325,30 @@ def launch_sim_collection(task_name: str, env_name: str):
     return proc
 
 
+def online_output_path(task_name: str, env_key: str, learner_key: str) -> Path:
+    """Where train_online.py saves the model for a given environment+learner+task."""
+    return MODELS_DIR / task_name / f"{env_key}_{learner_key}.pt"
+
+
 def launch_online_training(task_name: str, env_key: str, learner_key: str):
     """
-    Launch an "online" track environment's training script (e.g.
-    train_stack_cups_tamer.py) in a new terminal - same pattern as
-    launch_sim_collection() above, just for a different script. The UI
-    doesn't manage the process after this: close the terminal (or Ctrl+C in
-    it) to stop training. Returns the Popen object for the terminal.
+    Launch train_online.py --environment <env_key> --learner <learner_key> in
+    a new terminal - same pattern as launch_sim_collection() above, just for
+    a different script. Any registered environment/learner pair can be
+    launched this way; train_online.py doesn't check whether the combination
+    makes sense. The UI doesn't manage the process after this: close the
+    terminal (or Ctrl+C in it) to stop training. Returns the Popen object for
+    the terminal.
     """
-    learner_cfg = ENVIRONMENTS[env_key]["learners"][learner_key]
-    script_path = REPO_ROOT / learner_cfg["run_script"]
-    output_path = (MODELS_DIR / task_name / learner_cfg["output_name"]).resolve()
+    script_path = REPO_ROOT / "train_online.py"
+    output_path = online_output_path(task_name, env_key, learner_key).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     python = sys.executable
     cmd_inner = (
         f"cd {REPO_ROOT} && "
-        f"{python} {script_path} --output {output_path}; "
+        f"{python} {script_path} "
+        f"--environment {env_key} --learner {learner_key} --output {output_path}; "
         f"echo 'Training stopped - press Enter to close'; read"
     )
     try:
@@ -435,7 +458,7 @@ def _show_configuration_page():
 
         if track == "online":
             st.markdown("### Learner")
-            learner_keys = list(env_cfg["learners"].keys())
+            learner_keys = list(LEARNERS.keys())
             default_learner = (
                 st.session_state.learner
                 if st.session_state.learner in learner_keys
@@ -445,12 +468,13 @@ def _show_configuration_page():
                 "Learner",
                 learner_keys,
                 index=learner_keys.index(default_learner),
-                format_func=lambda k: env_cfg["learners"][k]["label"],
+                format_func=lambda k: LEARNERS[k]["label"],
                 key="config_learner",
                 label_visibility="collapsed",
             )
             st.session_state.learner = learner
             st.info(LEARNERS[learner]["description"])
+            st.caption("Any learner can be paired with any online environment here.")
 
         else:
             st.session_state.learner = None
@@ -678,38 +702,40 @@ def _show_configuration_page():
 def _show_online_workspace(env_cfg):
     """
     Workspace page for "online" track environments (e.g. Stack Cups +
-    TAMER). There's no Record/Train/Execute pipeline here - the learner
-    picks actions and updates itself in one live loop, so "running the
-    experiment" just means launching that script (see
-    launch_online_training()) and giving feedback while it runs.
+    TAMER, or Reach (Online) + SAC). There's no Record/Train/Execute
+    pipeline here - the learner picks actions and updates itself in one
+    live loop, so "running the experiment" just means launching
+    train_online.py (see launch_online_training()) and giving feedback
+    while it runs. Any registered learner can be picked for any
+    online-track environment; nothing here checks whether that combination
+    is sensible.
     """
+    env_key = st.session_state.environment
     learner_key = st.session_state.learner
-    learner_cfg = env_cfg["learners"][learner_key]
+    learner_cfg = LEARNERS[learner_key]
+    output_path = online_output_path(st.session_state.current_task, env_key, learner_key)
 
     tab_train, tab_log = st.tabs(["▶ Live Training", "📋 Log"])
 
     with tab_train:
-        st.header(f"{env_cfg['label']} — {LEARNERS[learner_key]['label']}")
-        st.info(LEARNERS[learner_key]["description"])
+        st.header(f"{env_cfg['label']} — {learner_cfg['label']}")
+        st.info(learner_cfg["description"])
 
         st.markdown(
-            f"Launching this runs `{learner_cfg['run_script']}` in a new "
-            "terminal window, which opens its own simulation window (and, "
-            "for TAMER, a feedback page). There's no separate training "
+            "Launching this runs `train_online.py --environment "
+            f"{env_key} --learner {learner_key}` in a new terminal window, "
+            "which opens its own simulation window (and, for feedback-based "
+            "learners, a feedback page). There's no separate training "
             "phase - the robot starts acting and learning from your "
             "feedback immediately."
         )
 
         if st.button("▶ Launch Training", type="primary", key="btn_launch_online"):
             try:
-                launch_online_training(
-                    st.session_state.current_task,
-                    st.session_state.environment,
-                    learner_key,
-                )
+                launch_online_training(st.session_state.current_task, env_key, learner_key)
                 log(
-                    f"Launched {learner_cfg['run_script']} "
-                    f"for task '{st.session_state.current_task}'"
+                    f"Launched train_online.py --environment {env_key} "
+                    f"--learner {learner_key} for task '{st.session_state.current_task}'"
                 )
             except Exception as e:
                 log(f"Failed to launch training: {e}")
@@ -719,10 +745,9 @@ def _show_online_workspace(env_cfg):
             st.markdown(f"Give feedback at: {learner_cfg['feedback_url']}")
 
         st.caption(
-            "The model is saved to "
-            f"`models/{st.session_state.current_task}/{learner_cfg['output_name']}` "
-            "when the terminal is closed (or Ctrl+C there) - there's no "
-            "programmatic stop from here yet."
+            f"The model is saved to `{output_path}` when the terminal is "
+            "closed (or Ctrl+C there) - there's no programmatic stop from "
+            "here yet."
         )
 
     with tab_log:
